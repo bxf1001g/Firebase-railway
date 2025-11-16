@@ -270,12 +270,13 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   log('========================================');
   log('🚀 Firebase Railway Proxy Server Started');
+  log('   Multi-Relay Support v2.0');
   log('========================================');
   log(`📡 Port: ${PORT}`);
   log(`🔥 Firebase: ${FIREBASE_URL}`);
   log(`🌐 Endpoints:`);
   log(`   GET /test - Health check`);
-  log(`   GET /relay/{DEVICE_ID} - Stream relay state`);
+  log(`   GET /relay/{DEVICE_ID}/{RELAY_NUM} - Stream relay state`);
   log('========================================');
 });
 
