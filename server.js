@@ -14,7 +14,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   
-  // Parse relay request
+  // Parse relay request - FIXED REGEX
   const match = req.url.match(/^/relay/([^/?]+)/);
   if (!match) {
     res.writeHead(404, {'Content-Type': 'text/plain'});
@@ -79,7 +79,7 @@ const server = http.createServer((req, res) => {
   proxyReq.end();
 });
 
-// CRITICAL: Use Railway's PORT environment variable
+// Use Railway's PORT
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, '0.0.0.0', () => {
@@ -87,13 +87,11 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`Firebase: ${FIREBASE_URL}`);
 });
 
-// Handle server errors
 server.on('error', (err) => {
   console.error('Server error:', err);
   process.exit(1);
 });
 
-// Keep alive
 setInterval(() => {
   console.log('Server alive, memory:', Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB');
 }, 60000);
