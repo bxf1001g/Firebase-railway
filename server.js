@@ -1,10 +1,9 @@
 const http = require('http');
 const https = require('https');
 
-const FIREBASE_HOST = 'relay-eu-b9be5.europe-west1.firebasedatabase.app';
-const FIREBASE_AUTH = 'QVtFVG4EWjMp4RJ52a8VPxwOJ20tuSYziWjTwhm2';
+const FIREBASE_URL = 'relay-eu-b9be5.europe-west1.firebasedatabase.app';
 
-http.createServer(function(req, res) {
+const server = http.createServer((req, res) => {
   console.log('Request:', req.url);
   
   if (req.url === '/' || req.url === '/test') {
@@ -21,7 +20,7 @@ http.createServer(function(req, res) {
   }
   
   const deviceId = parts[2];
-  const fbPath = '/devices/' + deviceId + '/relay.json?auth=' + FIREBASE_AUTH;
+  const fbPath = '/devices/' + deviceId + '/relay.json';  // No auth
   
   console.log('Proxy to:', fbPath);
   
@@ -31,7 +30,7 @@ http.createServer(function(req, res) {
   });
   
   https.get({
-    hostname: FIREBASE_HOST,
+    hostname: FIREBASE_URL,
     path: fbPath,
     headers: {'Accept': 'text/event-stream'}
   }, function(fbRes) {
@@ -46,6 +45,6 @@ http.createServer(function(req, res) {
     res.end();
   });
   
-}).listen(process.env.PORT || 3000, function() {
-  console.log('Server running on port', process.env.PORT || 3000);
+}).listen(process.env.PORT || 8080, function() {
+  console.log('Server running on port', process.env.PORT || 8080);
 });
