@@ -71,6 +71,41 @@ const server = http.createServer((req, res) => {
   log(`🔥 Proxying to Firebase: ${firebasePath}`);
   log(`   Device: ${deviceId}, Relay: ${relayNum}`);
   
+  // First, fetch the current value (non-SSE)
+  const currentValuePath = firebasePath;
+  https.get({
+    hostname: FIREBASE_URL,
+    path: currentValuePath,
+    method: 'GET'
+  }, (currentRes) => {
+    let currentData = '';
+    currentRes.on('data', (chunk) => {
+      currentData += chunk.toString();
+    });
+    currentRes.on('end', () => {
+      // Send current value immediately
+      try {
+        const currentValue = JSON.parse(currentData);
+        let initialState = null;
+        
+        if (typeof currentValue === 'boolean') {
+          initialState = currentValue ? 'ON' : 'OFF';
+        } else if (typeof currentValue === 'string') {
+          initialState = currentValue.toUpperCase();
+        }
+        
+        if (initialState) {
+          log(`📤 Sending initial state: ${initialState}`);
+          res.write(`data: ${initialState}\n\n`);
+        }
+      } catch (e) {
+        log(`⚠️  Could not parse initial value: ${currentData}`);
+      }
+    });
+  }).on('error', (err) => {
+    log(`❌ Error fetching initial value: ${err.message}`);
+  });
+  
   // Set SSE headers for the client (ESP32)
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
