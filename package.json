@@ -1,8 +1,27 @@
 {
-  "name": "firebase-proxy",
+  "name": "firebase-railway-proxy",
   "version": "1.0.0",
+  "description": "TCP proxy for Firebase RTDB to bypass SSL/TLS handshake issues with Airtel M2M SIM",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [
+    "firebase",
+    "proxy",
+    "tcp",
+    "sse",
+    "relay",
+    "esp32"
+  ],
+  "author": "Relay Control Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   }
 }
