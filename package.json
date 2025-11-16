@@ -1,8 +1,12 @@
 {
   "name": "firebase-proxy",
   "version": "1.0.0",
+  "description": "HTTP proxy for Firebase Realtime Database SSE",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
