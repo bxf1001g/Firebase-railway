@@ -29,8 +29,8 @@ if (-not (Test-Path ".git")) {
     Write-Host "[OK] Git repository initialized" -ForegroundColor Green
     
     Write-Host "`nAdding remote repository..." -ForegroundColor Yellow
-    Write-Host "Enter your GitHub repository URL (e.g., https://github.com/username/Firebase-railway.git):" -ForegroundColor Cyan
-    $repoUrl = Read-Host
+    $repoUrl = "https://github.com/bxf1001g/Firebase-railway.git"
+    Write-Host "Using repository: $repoUrl" -ForegroundColor Cyan
     
     git remote add origin $repoUrl
     Write-Host "[OK] Remote repository added" -ForegroundColor Green

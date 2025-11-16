@@ -40,7 +40,8 @@ const server = http.createServer((req, res) => {
     res.end('✅ Firebase Railway Proxy Running!\n' +
             `Server Time: ${new Date().toISOString()}\n` +
             `Firebase: ${FIREBASE_URL}\n` +
-            `Usage: GET /relay/{DEVICE_ID}\n`);
+            `Usage: GET /relay/{DEVICE_ID}/{RELAY_NUM}\n` +
+            `Example: GET /relay/dev_mhlj9n2msbwqu6bno/1\n`);
     log(`✅ Health check OK`);
     return;
   }
@@ -51,20 +52,24 @@ const server = http.createServer((req, res) => {
   if (urlParts[0] !== 'relay' || !urlParts[1]) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('❌ 404 Not Found\n' +
-            'Usage: GET /relay/{DEVICE_ID}\n' +
-            'Example: GET /relay/dev_mhlj9n2msbwqu6bno\n');
+            'Usage: GET /relay/{DEVICE_ID}/{RELAY_NUM}\n' +
+            'Example: GET /relay/dev_mhlj9n2msbwqu6bno/1\n' +
+            'Relay numbers: 1, 2, 3, 4 (default: 1)\n');
     log(`❌ Invalid URL: ${req.url}`);
     return;
   }
   
   const deviceId = urlParts[1];
   
+  // Get relay number from query param (default: relay_1)
+  const relayNum = urlParts[2] || '1';
+  
   // Firebase path for relay state
-  // Structure: /devices/{DEVICE_ID}/relay
-  const firebasePath = `/devices/${deviceId}/relay.json`;
+  // Structure: /devices/{DEVICE_ID}/relays/relay_X/state
+  const firebasePath = `/devices/${deviceId}/relays/relay_${relayNum}/state.json`;
   
   log(`🔥 Proxying to Firebase: ${firebasePath}`);
-  log(`   Device: ${deviceId}`);
+  log(`   Device: ${deviceId}, Relay: ${relayNum}`);
   
   // Set SSE headers for the client (ESP32)
   res.writeHead(200, {
