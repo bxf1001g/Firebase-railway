@@ -1,7 +1,7 @@
 const http = require('http');
 const https = require('https');
 
-const FIREBASE_URL = 'relay-eu-b9be5.europe-west1.firebasedatabase.app';
+const FIREBASE_URL = 'relay-test1001-default-rtdb.asia-southeast1.firebasedatabase.app';  // Changed!
 
 const server = http.createServer((req, res) => {
   console.log('Request:', req.url);
@@ -20,7 +20,7 @@ const server = http.createServer((req, res) => {
   }
   
   const deviceId = parts[2];
-  const fbPath = '/devices/' + deviceId + '/relay.json';  // No auth
+  const fbPath = '/devices/' + deviceId + '/relay.json';
   
   console.log('Proxy to:', fbPath);
   
