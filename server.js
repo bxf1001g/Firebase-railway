@@ -29,6 +29,216 @@ function log(message) {
   console.log(`[${timestamp}] ${message}`);
 }
 
+/**
+ * Handle multiplexed SSE stream for a device
+ * Streams 5 types of events:
+ * 1. relay - All 16 relay states
+ * 2. schedule - Schedule updates
+ * 3. power - PZEM 3-phase power data
+ * 4. auth_numbers - Authorized phone numbers for alerts
+ * 5. enabled - Subscription status
+ */
+function handleMultiplexedStream(req, res, deviceId) {
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  log(`🌐 Multiplexed stream requested by ${clientIp} for device: ${deviceId}`);
+  log(`📋 Creating fresh Firebase connections at ${new Date().toISOString()}`);
+  
+  // Set SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+  
+  // Send initial connection message
+  res.write(`data: ${JSON.stringify({type: 'connected', device: deviceId})}\n\n`);
+  
+  // Firebase paths for this device
+  // Add timestamp to prevent stale cache (force fresh data on each ESP32 connection)
+  const timestamp = Date.now();
+  const paths = {
+    relays: `/devices/${deviceId}/relays.json?timestamp=${timestamp}`,
+    schedules: `/devices/${deviceId}/schedules.json?timestamp=${timestamp}`,
+    power: `/devices/${deviceId}/power.json?timestamp=${timestamp}`,
+    authorized_numbers: `/devices/${deviceId}/authorized_numbers.json?timestamp=${timestamp}`,
+    enabled: `/devices/${deviceId}/enabled.json?timestamp=${timestamp}`
+  };
+  
+  // Track active connections
+  const connections = [];
+  let isActive = true;
+  
+  /**
+   * Create SSE connection to Firebase path
+   */
+  function createFirebaseStream(path, eventType) {
+    log(`🔥 Connecting to ${eventType}: ${path}`);
+    
+    const options = {
+      hostname: FIREBASE_URL,
+      path: path,
+      method: 'GET',
+      headers: {
+        'Accept': 'text/event-stream',
+        'Cache-Control': 'no-cache'
+      }
+    };
+    
+    const firebaseReq = https.get(options, (firebaseRes) => {
+      if (firebaseRes.statusCode !== 200) {
+        log(`❌ Firebase ${eventType} error: ${firebaseRes.statusCode}`);
+        return;
+      }
+      
+      log(`✅ Firebase ${eventType} connected`);
+      
+      let dataBuffer = '';
+      
+      firebaseRes.on('data', (chunk) => {
+        if (!isActive) return;
+        
+        dataBuffer += chunk.toString();
+        const lines = dataBuffer.split('\n');
+        dataBuffer = lines.pop() || '';
+        
+        lines.forEach((line) => {
+          if (!line.trim() || !line.startsWith('data:')) return;
+          
+          try {
+            const jsonStr = line.substring(5).trim();
+            if (!jsonStr || jsonStr === 'null') return;
+            
+            const firebaseData = JSON.parse(jsonStr);
+            const data = firebaseData.data;
+            
+            if (data === null || data === undefined) return;
+            
+            // Format based on event type
+            let multiplexedEvent;
+            
+            if (eventType === 'relays') {
+              // Handle relay updates
+              // Firebase structure: {relay_1: {state: true}, relay_2: {state: false}, ...}
+              if (firebaseData.path === '/') {
+                // Initial snapshot - send all relays
+                log(`🔥 Firebase initial snapshot for ${eventType}: ${JSON.stringify(data).substring(0, 200)}`);
+                Object.keys(data).forEach((relayKey) => {
+                  const match = relayKey.match(/relay_(\d+)/);
+                  if (match && data[relayKey].state !== undefined) {
+                    const relayNum = parseInt(match[1]);
+                    multiplexedEvent = {
+                      type: 'relay',
+                      relay: relayNum,
+                      state: data[relayKey].state
+                    };
+                    res.write(`data: ${JSON.stringify(multiplexedEvent)}\n\n`);
+                    log(`🔌 Relay ${relayNum}: ${data[relayKey].state}`);
+                  }
+                });
+              } else {
+                // Individual relay update
+                log(`🔥 Firebase relay update: path=${firebaseData.path}, state=${data}`);
+                const pathMatch = firebaseData.path.match(/^\/relay_(\d+)\/state$/);
+                if (pathMatch) {
+                  const relayNum = parseInt(pathMatch[1]);
+                  multiplexedEvent = {
+                    type: 'relay',
+                    relay: relayNum,
+                    state: data
+                  };
+                  res.write(`data: ${JSON.stringify(multiplexedEvent)}\n\n`);
+                  log(`🔌 Relay ${relayNum}: ${data}`);
+                }
+              }
+            } else if (eventType === 'schedules') {
+              // Send full schedule data
+              multiplexedEvent = {
+                type: 'schedule',
+                schedules: data
+              };
+              res.write(`data: ${JSON.stringify(multiplexedEvent)}\n\n`);
+              log(`📅 Schedules updated`);
+              
+            } else if (eventType === 'power') {
+              // Send power data for all phases
+              multiplexedEvent = {
+                type: 'power',
+                power: data
+              };
+              res.write(`data: ${JSON.stringify(multiplexedEvent)}\n\n`);
+              log(`⚡ Power data updated`);
+              
+            } else if (eventType === 'authorized_numbers') {
+              // Send authorized numbers array
+              const numbers = Array.isArray(data) ? data : [];
+              multiplexedEvent = {
+                type: 'auth_numbers',
+                numbers: numbers
+              };
+              res.write(`data: ${JSON.stringify(multiplexedEvent)}\n\n`);
+              log(`📞 Authorized numbers: ${numbers.length} entries`);
+              
+            } else if (eventType === 'enabled') {
+              // Send subscription status
+              multiplexedEvent = {
+                type: 'enabled',
+                enabled: data === true
+              };
+              res.write(`data: ${JSON.stringify(multiplexedEvent)}\n\n`);
+              log(`🔓 Subscription enabled: ${data}`);
+            }
+            
+          } catch (e) {
+            if (DEBUG) {
+              log(`⚠️  ${eventType} parse error: ${e.message}`);
+            }
+          }
+        });
+      });
+      
+      firebaseRes.on('end', () => {
+        log(`🔌 Firebase ${eventType} ended`);
+      });
+      
+      firebaseRes.on('error', (err) => {
+        log(`❌ Firebase ${eventType} error: ${err.message}`);
+      });
+    });
+    
+    firebaseReq.on('error', (err) => {
+      log(`❌ Firebase ${eventType} connection error: ${err.message}`);
+    });
+    
+    connections.push(firebaseReq);
+  }
+  
+  // Create streams for all 5 data types
+  createFirebaseStream(paths.relays, 'relays');
+  createFirebaseStream(paths.schedules, 'schedules');
+  createFirebaseStream(paths.power, 'power');
+  createFirebaseStream(paths.authorized_numbers, 'authorized_numbers');
+  createFirebaseStream(paths.enabled, 'enabled');
+  
+  // Keep-alive ping every 30 seconds
+  const keepAliveInterval = setInterval(() => {
+    if (res.writable) {
+      res.write(': keep-alive\n\n');
+    } else {
+      clearInterval(keepAliveInterval);
+    }
+  }, 30000);
+  
+  // Handle client disconnect
+  req.on('close', () => {
+    log(`🔌 Client disconnected: ${deviceId}`);
+    isActive = false;
+    clearInterval(keepAliveInterval);
+    connections.forEach(conn => conn.destroy());
+  });
+}
+
+
 // Create HTTP server
 const server = http.createServer((req, res) => {
   const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -39,22 +249,43 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('✅ Firebase Railway Proxy Running!\n' +
             `Server Time: ${new Date().toISOString()}\n` +
-            `Firebase: ${FIREBASE_URL}\n` +
-            `Usage: GET /relay/{DEVICE_ID}/{RELAY_NUM}\n` +
-            `Example: GET /relay/dev_mhlj9n2msbwqu6bno/1\n`);
+            `Firebase: ${FIREBASE_URL}\n\n` +
+            `Endpoints:\n` +
+            `  GET /device/{DEVICE_ID} - Multiplexed SSE stream (recommended)\n` +
+            `    Streams: relays (x16), schedules, power, auth_numbers, enabled\n\n` +
+            `  GET /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream (legacy)\n\n` +
+            `Examples:\n` +
+            `  GET /device/dev_abc123xyz\n` +
+            `  GET /relay/dev_abc123xyz/1\n` +
+            `\n` +
+            `Note: Device IDs are generated via the relay_admin panel\n`);
     log(`✅ Health check OK`);
     return;
   }
   
-  // Parse URL - expecting /relay/{DEVICE_ID}
+  // Parse URL - supporting two endpoints:
+  // 1. /device/{DEVICE_ID} - Multiplexed stream (relays, schedules, power, auth_numbers, enabled)
+  // 2. /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream (legacy)
   const urlParts = req.url.split('/').filter(Boolean);
   
+  // Handle multiplexed endpoint
+  if (urlParts[0] === 'device' && urlParts[1]) {
+    handleMultiplexedStream(req, res, urlParts[1]);
+    return;
+  }
+  
+  // Handle single relay endpoint (legacy)
   if (urlParts[0] !== 'relay' || !urlParts[1]) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('❌ 404 Not Found\n' +
-            'Usage: GET /relay/{DEVICE_ID}/{RELAY_NUM}\n' +
-            'Example: GET /relay/dev_mhlj9n2msbwqu6bno/1\n' +
-            'Relay numbers: 1, 2, 3, 4 (default: 1)\n');
+            'Usage:\n' +
+            '  GET /device/{DEVICE_ID} - Multiplexed stream (recommended)\n' +
+            '  GET /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream\n' +
+            'Examples:\n' +
+            '  GET /device/dev_abc123xyz\n' +
+            '  GET /relay/dev_abc123xyz/1\n' +
+            '\n' +
+            'Device IDs are created in the relay_admin panel\n');
     log(`❌ Invalid URL: ${req.url}`);
     return;
   }
@@ -270,13 +501,15 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   log('========================================');
   log('🚀 Firebase Railway Proxy Server Started');
-  log('   Multi-Relay Support v2.0');
+  log('   Multiplexed SSE Support v3.0');
   log('========================================');
   log(`📡 Port: ${PORT}`);
   log(`🔥 Firebase: ${FIREBASE_URL}`);
   log(`🌐 Endpoints:`);
   log(`   GET /test - Health check`);
-  log(`   GET /relay/{DEVICE_ID}/{RELAY_NUM} - Stream relay state`);
+  log(`   GET /device/{DEVICE_ID} - Multiplexed stream (NEW)`);
+  log(`     • Streams: relays (x16), schedules, power, auth_numbers, enabled`);
+  log(`   GET /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream (legacy)`);
   log('========================================');
 });
 
