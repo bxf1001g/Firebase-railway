@@ -227,7 +227,7 @@ function handleMultiplexedStream(req, res, deviceId) {
     } else {
       clearInterval(keepAliveInterval);
     }
-  }, 30000);
+  }, 10000);
   
   // Handle client disconnect
   req.on('close', () => {
