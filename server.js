@@ -41,6 +41,7 @@ function log(message) {
 function handleMultiplexedStream(req, res, deviceId) {
   const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   log(`🌐 Multiplexed stream requested by ${clientIp} for device: ${deviceId}`);
+  log(`📋 Creating fresh Firebase connections at ${new Date().toISOString()}`);
   
   // Set SSE headers
   res.writeHead(200, {
@@ -54,12 +55,14 @@ function handleMultiplexedStream(req, res, deviceId) {
   res.write(`data: ${JSON.stringify({type: 'connected', device: deviceId})}\n\n`);
   
   // Firebase paths for this device
+  // Add timestamp to prevent stale cache (force fresh data on each ESP32 connection)
+  const timestamp = Date.now();
   const paths = {
-    relays: `/devices/${deviceId}/relays.json`,
-    schedules: `/devices/${deviceId}/schedules.json`,
-    power: `/devices/${deviceId}/power.json`,
-    authorized_numbers: `/devices/${deviceId}/authorized_numbers.json`,
-    enabled: `/devices/${deviceId}/enabled.json`
+    relays: `/devices/${deviceId}/relays.json?timestamp=${timestamp}`,
+    schedules: `/devices/${deviceId}/schedules.json?timestamp=${timestamp}`,
+    power: `/devices/${deviceId}/power.json?timestamp=${timestamp}`,
+    authorized_numbers: `/devices/${deviceId}/authorized_numbers.json?timestamp=${timestamp}`,
+    enabled: `/devices/${deviceId}/enabled.json?timestamp=${timestamp}`
   };
   
   // Track active connections
@@ -119,6 +122,7 @@ function handleMultiplexedStream(req, res, deviceId) {
               // Firebase structure: {relay_1: {state: true}, relay_2: {state: false}, ...}
               if (firebaseData.path === '/') {
                 // Initial snapshot - send all relays
+                log(`🔥 Firebase initial snapshot for ${eventType}: ${JSON.stringify(data).substring(0, 200)}`);
                 Object.keys(data).forEach((relayKey) => {
                   const match = relayKey.match(/relay_(\d+)/);
                   if (match && data[relayKey].state !== undefined) {
@@ -134,6 +138,7 @@ function handleMultiplexedStream(req, res, deviceId) {
                 });
               } else {
                 // Individual relay update
+                log(`🔥 Firebase relay update: path=${firebaseData.path}, state=${data}`);
                 const pathMatch = firebaseData.path.match(/^\/relay_(\d+)\/state$/);
                 if (pathMatch) {
                   const relayNum = parseInt(pathMatch[1]);
