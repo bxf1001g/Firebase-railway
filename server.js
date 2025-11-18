@@ -243,6 +243,98 @@ function handleMultiplexedStream(req, res, deviceId) {
   });
 }
 
+/**
+ * Handle relay state update from ESP32 (schedule execution)
+ * POST /update
+ * Body: {"device":"dev_xxx","relay":5,"state":true}
+ */
+function handleRelayUpdate(req, res) {
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  log(`📝 Relay update request from ${clientIp}`);
+  
+  let body = '';
+  
+  req.on('data', (chunk) => {
+    body += chunk.toString();
+  });
+  
+  req.on('end', () => {
+    try {
+      const update = JSON.parse(body);
+      const { device, relay, state } = update;
+      
+      if (!device || !relay || state === undefined) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing required fields: device, relay, state' }));
+        log(`❌ Invalid update request: ${body}`);
+        return;
+      }
+      
+      log(`📝 ESP32 schedule executed: Device ${device}, Relay ${relay} → ${state ? 'ON' : 'OFF'}`);
+      
+      // Write to Firebase RTDB
+      const firebasePath = `/devices/${device}/relays/relay_${relay}/state.json`;
+      const firebaseData = JSON.stringify(state);
+      
+      const options = {
+        hostname: FIREBASE_URL,
+        path: firebasePath,
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': firebaseData.length
+        }
+      };
+      
+      log(`🔥 Writing to Firebase: ${firebasePath} = ${state}`);
+      
+      const firebaseReq = https.request(options, (firebaseRes) => {
+        let responseData = '';
+        
+        firebaseRes.on('data', (chunk) => {
+          responseData += chunk.toString();
+        });
+        
+        firebaseRes.on('end', () => {
+          if (firebaseRes.statusCode === 200) {
+            log(`✅ Firebase updated successfully: Relay ${relay} = ${state}`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ 
+              success: true, 
+              device, 
+              relay, 
+              state,
+              timestamp: new Date().toISOString()
+            }));
+          } else {
+            log(`❌ Firebase error: ${firebaseRes.statusCode} - ${responseData}`);
+            res.writeHead(firebaseRes.statusCode, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ 
+              error: 'Firebase write failed', 
+              status: firebaseRes.statusCode,
+              details: responseData
+            }));
+          }
+        });
+      });
+      
+      firebaseReq.on('error', (err) => {
+        log(`❌ Firebase request error: ${err.message}`);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Firebase connection failed', details: err.message }));
+      });
+      
+      firebaseReq.write(firebaseData);
+      firebaseReq.end();
+      
+    } catch (e) {
+      log(`❌ JSON parse error: ${e.message}`);
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid JSON', details: e.message }));
+    }
+  });
+}
+
 
 // Create HTTP server
 const server = http.createServer((req, res) => {
@@ -256,22 +348,32 @@ const server = http.createServer((req, res) => {
             `Server Time: ${new Date().toISOString()}\n` +
             `Firebase: ${FIREBASE_URL}\n\n` +
             `Endpoints:\n` +
-            `  GET /device/{DEVICE_ID} - Multiplexed SSE stream (recommended)\n` +
+            `  GET  /device/{DEVICE_ID} - Multiplexed SSE stream (recommended)\n` +
             `    Streams: relays (x16), schedules, power, auth_numbers, enabled\n\n` +
-            `  GET /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream (legacy)\n\n` +
+            `  GET  /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream (legacy)\n\n` +
+            `  POST /update - ESP32 writes relay state (schedule execution)\n` +
+            `    Body: {"device":"dev_xxx","relay":5,"state":true}\n\n` +
             `Examples:\n` +
-            `  GET /device/dev_abc123xyz\n` +
-            `  GET /relay/dev_abc123xyz/1\n` +
+            `  GET  /device/dev_abc123xyz\n` +
+            `  GET  /relay/dev_abc123xyz/1\n` +
+            `  POST /update (with JSON body)\n` +
             `\n` +
             `Note: Device IDs are generated via the relay_admin panel\n`);
     log(`✅ Health check OK`);
     return;
   }
   
-  // Parse URL - supporting two endpoints:
+  // Parse URL - supporting three endpoints:
   // 1. /device/{DEVICE_ID} - Multiplexed stream (relays, schedules, power, auth_numbers, enabled)
   // 2. /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream (legacy)
+  // 3. POST /update - ESP32 writes relay state to Firebase (schedule execution)
   const urlParts = req.url.split('/').filter(Boolean);
+  
+  // Handle POST /update endpoint (ESP32 → Firebase write)
+  if (req.method === 'POST' && urlParts[0] === 'update') {
+    handleRelayUpdate(req, res);
+    return;
+  }
   
   // Handle multiplexed endpoint
   if (urlParts[0] === 'device' && urlParts[1]) {
