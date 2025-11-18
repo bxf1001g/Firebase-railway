@@ -138,13 +138,18 @@ function handleMultiplexedStream(req, res, deviceId) {
               } else {
                 // Individual relay update
                 log(`🔥 Firebase update: path=${firebaseData.path}, state=${data}`);
-                const pathMatch = firebaseData.path.match(/^\/relay_(\d+)\/state$/);
+                // Firebase sends paths like: /relay_1 or /relay_1/state
+                const pathMatch = firebaseData.path.match(/^\/relay_(\d+)/);
                 if (pathMatch) {
                   const relayNum = parseInt(pathMatch[1]);
+                  // Extract actual state value
+                  const relayState = (data && typeof data === 'object' && data.state !== undefined) 
+                    ? data.state 
+                    : data;
                   multiplexedEvent = {
                     type: 'relay',
                     relay: relayNum,
-                    state: data
+                    state: relayState
                   };
                   const eventStr = JSON.stringify(multiplexedEvent);
                   res.write(`data: ${eventStr}\n\n`);
