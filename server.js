@@ -220,7 +220,7 @@ function handleMultiplexedStream(req, res, deviceId) {
   createFirebaseStream(paths.authorized_numbers, 'authorized_numbers');
   createFirebaseStream(paths.enabled, 'enabled');
   
-  // Keep-alive ping every 30 seconds
+  // Keep-alive ping every 10 seconds (Railway kills idle connections at ~30s)
   const keepAliveInterval = setInterval(() => {
     if (res.writable) {
       res.write(': keep-alive\n\n');
@@ -483,14 +483,14 @@ const server = http.createServer((req, res) => {
     firebaseReq.destroy();
   });
   
-  // Keep-alive ping every 30 seconds
+  // Keep-alive ping every 10 seconds (Railway kills idle connections at ~30s)
   const keepAliveInterval = setInterval(() => {
     if (res.writable) {
       res.write(': keep-alive\n\n');
     } else {
       clearInterval(keepAliveInterval);
     }
-  }, 30000);
+  }, 10000);
   
   req.on('close', () => {
     clearInterval(keepAliveInterval);
