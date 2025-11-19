@@ -335,6 +335,84 @@ function handleRelayUpdate(req, res) {
   });
 }
 
+/**
+ * Handle power telemetry uploads from ESP32
+ * POST /power
+ * Body: {"device":"dev_xxx","data":{...power payload...}}
+ */
+function handlePowerUpload(req, res) {
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  log(`⚡ Power upload request from ${clientIp}`);
+
+  let body = '';
+  req.on('data', (chunk) => {
+    body += chunk.toString();
+  });
+
+  req.on('end', () => {
+    try {
+      const payload = JSON.parse(body);
+      const { device, data } = payload;
+
+      if (!device || !data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing required fields: device, data' }));
+        log(`❌ Invalid power upload: ${body}`);
+        return;
+      }
+
+      const firebasePath = `/devices/${device}/power.json`;
+      const firebaseData = JSON.stringify(data);
+
+      const options = {
+        hostname: FIREBASE_URL,
+        path: firebasePath,
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': firebaseData.length
+        }
+      };
+
+      log(`⚙️ Writing power payload to Firebase: ${firebasePath}`);
+
+      const firebaseReq = https.request(options, (firebaseRes) => {
+        let responseData = '';
+
+        firebaseRes.on('data', (chunk) => {
+          responseData += chunk.toString();
+        });
+
+        firebaseRes.on('end', () => {
+          if (firebaseRes.statusCode === 200) {
+            log(`✅ Power data stored for ${device}`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, device, timestamp: new Date().toISOString() }));
+          } else {
+            log(`❌ Firebase power write failed: ${firebaseRes.statusCode} - ${responseData}`);
+            res.writeHead(firebaseRes.statusCode, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Firebase write failed', status: firebaseRes.statusCode, details: responseData }));
+          }
+        });
+      });
+
+      firebaseReq.on('error', (err) => {
+        log(`❌ Firebase power request error: ${err.message}`);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Firebase connection failed', details: err.message }));
+      });
+
+      firebaseReq.write(firebaseData);
+      firebaseReq.end();
+
+    } catch (e) {
+      log(`❌ Power JSON parse error: ${e.message}`);
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid JSON', details: e.message }));
+    }
+  });
+}
+
 
 // Create HTTP server
 const server = http.createServer((req, res) => {
@@ -352,26 +430,35 @@ const server = http.createServer((req, res) => {
             `    Streams: relays (x16), schedules, power, auth_numbers, enabled\n\n` +
             `  GET  /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream (legacy)\n\n` +
             `  POST /update - ESP32 writes relay state (schedule execution)\n` +
+            `  POST /power  - ESP32 uploads PZEM telemetry\n` +
             `    Body: {"device":"dev_xxx","relay":5,"state":true}\n\n` +
             `Examples:\n` +
             `  GET  /device/dev_abc123xyz\n` +
             `  GET  /relay/dev_abc123xyz/1\n` +
             `  POST /update (with JSON body)\n` +
+            `  POST /power  (with JSON body)\n` +
             `\n` +
             `Note: Device IDs are generated via the relay_admin panel\n`);
     log(`✅ Health check OK`);
     return;
   }
   
-  // Parse URL - supporting three endpoints:
+  // Parse URL - supporting endpoints:
   // 1. /device/{DEVICE_ID} - Multiplexed stream (relays, schedules, power, auth_numbers, enabled)
   // 2. /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream (legacy)
   // 3. POST /update - ESP32 writes relay state to Firebase (schedule execution)
+  // 4. POST /power  - ESP32 uploads power telemetry snapshots
   const urlParts = req.url.split('/').filter(Boolean);
   
   // Handle POST /update endpoint (ESP32 → Firebase write)
   if (req.method === 'POST' && urlParts[0] === 'update') {
     handleRelayUpdate(req, res);
+    return;
+  }
+
+  // Handle POST /power endpoint (ESP32 → Firebase power snapshot)
+  if (req.method === 'POST' && urlParts[0] === 'power') {
+    handlePowerUpload(req, res);
     return;
   }
   
@@ -617,6 +704,8 @@ server.listen(PORT, () => {
   log(`   GET /device/{DEVICE_ID} - Multiplexed stream (NEW)`);
   log(`     • Streams: relays (x16), schedules, power, auth_numbers, enabled`);
   log(`   GET /relay/{DEVICE_ID}/{RELAY_NUM} - Single relay stream (legacy)`);
+  log(`   POST /update - Relay state write-through`);
+  log(`   POST /power  - Power telemetry upload`);
   log('========================================');
 });
 
